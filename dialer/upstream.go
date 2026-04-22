@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
@@ -15,12 +14,18 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 const (
 	PROXY_CONNECT_METHOD       = "CONNECT"
 	PROXY_HOST_HEADER          = "Host"
 	PROXY_AUTHORIZATION_HEADER = "Proxy-Authorization"
+)
+
+var (
+	DEFAULT_CLIENT_HELLO *utls.ClientHelloID = &utls.HelloChrome_Auto
 )
 
 type stringCb = func() (string, error)
@@ -35,22 +40,28 @@ type ContextDialer interface {
 }
 
 type ProxyDialer struct {
-	address       stringCb
-	tlsServerName stringCb
-	fakeSNI       stringCb
-	auth          stringCb
-	next          ContextDialer
-	caPool        *x509.CertPool
+	address        stringCb
+	tlsServerName  stringCb
+	fakeSNI        stringCb
+	auth           stringCb
+	next           ContextDialer
+	caPool         *x509.CertPool
+	tlsClientHello *utls.ClientHelloID
 }
 
-func NewProxyDialer(address, tlsServerName, fakeSNI, auth stringCb, caPool *x509.CertPool, nextDialer ContextDialer) *ProxyDialer {
+func NewProxyDialer(address, tlsServerName, fakeSNI, auth stringCb, caPool *x509.CertPool, nextDialer ContextDialer, tlsClientHello *utls.ClientHelloID) *ProxyDialer {
+	if tlsClientHello == nil {
+		tlsClientHello = DEFAULT_CLIENT_HELLO
+	}
+
 	return &ProxyDialer{
-		address:       address,
-		tlsServerName: tlsServerName,
-		fakeSNI:       fakeSNI,
-		auth:          auth,
-		next:          nextDialer,
-		caPool:        caPool,
+		address:        address,
+		tlsServerName:  tlsServerName,
+		fakeSNI:        fakeSNI,
+		auth:           auth,
+		next:           nextDialer,
+		caPool:         caPool,
+		tlsClientHello: tlsClientHello,
 	}
 }
 
@@ -87,7 +98,8 @@ func ProxyDialerFromURL(u *url.URL, next ContextDialer) (*ProxyDialer, error) {
 		WrapStringToCb(tlsServerName),
 		auth,
 		nil,
-		next), nil
+		next,
+		nil), nil
 }
 
 func (d *ProxyDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
@@ -114,27 +126,30 @@ func (d *ProxyDialer) DialContext(ctx context.Context, network, address string) 
 	if err != nil {
 		return nil, err
 	}
+
+	tlsConfig := &utls.Config{}
+
 	if uTLSServerName != "" {
 		// Custom cert verification logic:
 		// DO NOT send SNI extension of TLS ClientHello
 		// DO peer certificate verification against specified servername
-		conn = tls.Client(conn, &tls.Config{
-			ServerName:         fakeSNI,
-			InsecureSkipVerify: true,
-			VerifyConnection: func(cs tls.ConnectionState) error {
-				opts := x509.VerifyOptions{
-					DNSName:       uTLSServerName,
-					Intermediates: x509.NewCertPool(),
-					Roots:         d.caPool,
-				}
-				for _, cert := range cs.PeerCertificates[1:] {
-					opts.Intermediates.AddCert(cert)
-				}
-				_, err := cs.PeerCertificates[0].Verify(opts)
-				return err
-			},
-		})
+		tlsConfig.ServerName = fakeSNI
+		tlsConfig.InsecureSkipVerify = true
+		tlsConfig.VerifyConnection = func(cs utls.ConnectionState) error {
+			opts := x509.VerifyOptions{
+				DNSName:       uTLSServerName,
+				Intermediates: x509.NewCertPool(),
+				Roots:         d.caPool,
+			}
+			for _, cert := range cs.PeerCertificates[1:] {
+				opts.Intermediates.AddCert(cert)
+			}
+			_, err := cs.PeerCertificates[0].Verify(opts)
+			return err
+		}
 	}
+
+	conn = utls.UClient(conn, tlsConfig, *d.tlsClientHello)
 
 	req := &http.Request{
 		Method:     PROXY_CONNECT_METHOD,
@@ -172,7 +187,7 @@ func (d *ProxyDialer) DialContext(ctx context.Context, network, address string) 
 	}
 
 	if proxyResp.StatusCode != http.StatusOK {
-		return nil, errors.New(fmt.Sprintf("bad response from upstream proxy server: %s", proxyResp.Status))
+		return nil, fmt.Errorf("bad response from upstream proxy server: %s", proxyResp.Status)
 	}
 
 	return conn, nil

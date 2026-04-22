@@ -385,7 +385,8 @@ func run() int {
 				return dialer.BasicAuthHeader(seclient.GetProxyCredentials()), nil
 			},
 			caPool,
-			d)
+			d,
+			nil)
 	}
 
 	var handlerDialer dialer.ContextDialer

@@ -99,10 +99,13 @@ func probeDialer(ctx context.Context, dialer ContextDialer, url string, dlLimit 
 func NewFastestServerSelectionFunc(url string, dlLimit int64, tlsClientConfig *tls.Config) SelectionFunc {
 	return func(ctx context.Context, dialers []ContextDialer) (ContextDialer, error) {
 		var resErr error
+
 		ctx, cl := context.WithCancel(ctx)
 		defer cl()
+
 		errors := make(chan error)
 		success := make(chan ContextDialer)
+
 		for _, dialer := range dialers {
 			go func(dialer ContextDialer) {
 				err := probeDialer(ctx, dialer, url, dlLimit, tlsClientConfig)
@@ -119,7 +122,8 @@ func NewFastestServerSelectionFunc(url string, dlLimit int64, tlsClientConfig *t
 				}
 			}(dialer)
 		}
-		for _ = range dialers {
+
+		for range dialers {
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
