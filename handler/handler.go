@@ -51,7 +51,8 @@ func (s *ProxyHandler) HandleTunnel(wr http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if req.ProtoMajor == 0 || req.ProtoMajor == 1 {
+	switch req.ProtoMajor {
+	case 0, 1:
 		// Upgrade client connection
 		localconn, _, err := hijack(wr)
 		if err != nil {
@@ -65,12 +66,12 @@ func (s *ProxyHandler) HandleTunnel(wr http.ResponseWriter, req *http.Request) {
 		fmt.Fprintf(localconn, "HTTP/%d.%d 200 OK\r\n\r\n", req.ProtoMajor, req.ProtoMinor)
 
 		proxy(req.Context(), localconn, conn)
-	} else if req.ProtoMajor == 2 {
+	case 2:
 		wr.Header()["Date"] = nil
 		wr.WriteHeader(http.StatusOK)
 		flush(wr)
 		proxyh2(req.Context(), req.Body, wr, conn)
-	} else {
+	default:
 		s.logger.Error("Unsupported protocol version: %s", req.Proto)
 		http.Error(wr, "Unsupported protocol version.", http.StatusBadRequest)
 		return
@@ -138,7 +139,6 @@ func proxy(ctx context.Context, left, right net.Conn) {
 		return
 	}
 	<-groupdone
-	return
 }
 
 func proxyh2(ctx context.Context, leftreader io.ReadCloser, leftwriter io.Writer, right net.Conn) {
@@ -168,7 +168,6 @@ func proxyh2(ctx context.Context, leftreader io.ReadCloser, leftwriter io.Writer
 		return
 	}
 	<-groupdone
-	return
 }
 
 // Hop-by-hop headers. These are removed when sent to the backend.
