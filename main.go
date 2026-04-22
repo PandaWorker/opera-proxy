@@ -10,7 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
+
 	"log"
 	"net"
 	"net/http"
@@ -232,7 +232,7 @@ func run() int {
 
 	caPool := x509.NewCertPool()
 	if args.caFile != "" {
-		certs, err := ioutil.ReadFile(args.caFile)
+		certs, err := os.ReadFile(args.caFile)
 		if err != nil {
 			mainLogger.Error("Can't load CA file: %v", err)
 			return 15
